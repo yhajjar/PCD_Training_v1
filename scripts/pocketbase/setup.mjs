@@ -94,12 +94,13 @@ async function ensureCollection(name, schema) {
 
 async function ensureRoleField() {
   const users = await pb.collections.getOne('users');
-  const hasRole = (users.schema || []).some((f) => f.name === 'role');
+  const schema = Array.isArray(users.schema) ? users.schema : [];
+  const hasRole = schema.some((f) => f.name === 'role');
   if (hasRole) {
     console.log('Users collection already has role field');
     return;
   }
-  const updatedSchema = [...users.schema, textField('role')];
+  const updatedSchema = [...schema, textField('role')];
   await pb.collections.update(users.id, { schema: updatedSchema });
   console.log('Added role field to users collection');
 }
