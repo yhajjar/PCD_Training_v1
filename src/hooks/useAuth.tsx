@@ -24,39 +24,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    // Check for existing auth state on mount
-    const checkAuth = async () => {
-      if (pb.authStore.isValid) {
-        const record = pb.authStore.model;
-        setUser(record);
+    // Listen to auth state changes (fire immediately)
+    const unsubscribe = pb.authStore.onChange((token, model) => {
+      if (pb.authStore.isValid && model) {
+        setUser(model);
         setSession(pb.authStore);
-        setIsAdmin(record?.role === 'admin' || pb.authStore.record?.role === 'admin');
-      }
-      setIsLoading(false);
-    };
-
-    checkAuth();
-
-    // Listen to auth state changes
-    const unsubscribe = pb.authStore.subscribe(() => {
-      const record = pb.authStore.model;
-      if (record) {
-        setUser(record);
-        setSession(pb.authStore);
-        setIsAdmin(record?.role === 'admin' || pb.authStore.record?.role === 'admin');
+        setIsAdmin(model?.role === 'admin');
       } else {
         setUser(null);
         setSession(null);
         setIsAdmin(false);
       }
       setIsLoading(false);
-    });
+    }, true);
 
     return unsubscribe;
   }, []);
 
   const signOut = async () => {
-    await pb.authStore.clear();
+    pb.authStore.clear();
     setUser(null);
     setSession(null);
     setIsAdmin(false);
