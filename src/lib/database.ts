@@ -514,7 +514,7 @@ function dbToTrainingUpdate(row: DbTrainingUpdate): TrainingUpdate {
 export async function fetchTrainingUpdates(): Promise<TrainingUpdate[]> {
   try {
     const result = await pb.collection('training_updates').getList(1, 50, {
-      sort: '-created'
+      sort: 'created'
     });
     return result.items.map(row => dbToTrainingUpdate(row as DbTrainingUpdate));
   } catch (error) {
