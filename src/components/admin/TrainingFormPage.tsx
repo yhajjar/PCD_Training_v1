@@ -333,6 +333,7 @@ export function TrainingFormPage() {
       const uploadId = id || `temp-${Date.now()}`;
       let heroImageUrl = formData.heroImage;
       let updatedAttachments = [...formData.attachments];
+      const heroPending = pendingUploads.find(p => p.type === 'hero');
 
       // Note: PocketBase handles files directly via FormData
       // Files will be uploaded when creating/updating training
@@ -362,9 +363,10 @@ export function TrainingFormPage() {
 
       if (isEditing) {
         // For editing, include the existing id
-        const trainingData: Training = {
+        const trainingData: Training & { heroImageFile?: File | null } = {
           ...trainingFormData,
           id: id!,
+          heroImageFile: heroPending?.file || null,
         };
         const existingTraining = getTrainingById(id!);
         await updateTraining(trainingData);
@@ -393,7 +395,10 @@ export function TrainingFormPage() {
         });
       } else {
         // For new trainings, let database generate the ID and get it back
-        const createdTraining = await addTraining(trainingFormData);
+        const createdTraining = await addTraining({
+          ...trainingFormData,
+          heroImageFile: heroPending?.file || null,
+        });
         
         if (createdTraining) {
           await addTrainingUpdate({

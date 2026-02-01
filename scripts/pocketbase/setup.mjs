@@ -64,6 +64,14 @@ const jsonField = (name, required = false) => ({
   options: { maxSize: 1048576 },
 });
 
+const fileField = (name, required = false, maxSize = 5242880) => ({
+  name,
+  type: 'file',
+  required,
+  unique: false,
+  options: { maxSize, maxSelect: 1, mimeTypes: [] },
+});
+
 async function ensureCollection(name, schema) {
   let existing = null;
   try {
@@ -156,7 +164,7 @@ async function run() {
     numberField('max_registrations', false, true),
     textField('registration_method'),
     textField('external_link'),
-    textField('hero_image'),
+    fileField('hero_image'),
     boolField('is_featured'),
     boolField('is_recommended'),
     boolField('is_registration_open'),

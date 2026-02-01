@@ -87,6 +87,17 @@ interface DbTraining {
   target_audience: string | null;
 }
 
+function getTrainingHeroUrl(row: DbTraining): string | undefined {
+  if (!row.hero_image) {
+    return undefined;
+  }
+  try {
+    return pb.files.getUrl(row as any, row.hero_image);
+  } catch {
+    return row.hero_image || undefined;
+  }
+}
+
 function dbToTraining(row: DbTraining, attachments: TrainingAttachment[] = []): Training {
   return {
     id: row.id,
@@ -104,7 +115,7 @@ function dbToTraining(row: DbTraining, attachments: TrainingAttachment[] = []): 
     maxRegistrations: row.max_registrations,
     registrationMethod: row.registration_method as Training['registrationMethod'],
     externalLink: row.external_link || undefined,
-    heroImage: row.hero_image || undefined,
+    heroImage: getTrainingHeroUrl(row),
     isFeatured: row.is_featured,
     isRecommended: row.is_recommended,
     isRegistrationOpen: row.is_registration_open,
@@ -146,9 +157,10 @@ export async function fetchTrainings(): Promise<Training[]> {
   }
 }
 
-export async function createTraining(training: Omit<Training, 'id'> & { id?: string }): Promise<Training | null> {
+export async function createTraining(training: Omit<Training, 'id'> & { id?: string; heroImageFile?: File | null }): Promise<Training | null> {
   try {
-    const result = await pb.collection('trainings').create({
+    const hasHeroFile = Boolean(training.heroImageFile);
+    const payload = {
       name: training.name,
       description: training.description,
       short_description: training.shortDescription || null,
@@ -171,7 +183,21 @@ export async function createTraining(training: Omit<Training, 'id'> & { id?: str
       location: training.location || null,
       speakers: training.speakers || null,
       target_audience: training.targetAudience || null,
-    });
+    } as Record<string, any>;
+
+    let result;
+    if (hasHeroFile) {
+      const formData = new FormData();
+      Object.entries(payload).forEach(([key, value]) => {
+        if (value !== null && value !== undefined) {
+          formData.append(key, String(value));
+        }
+      });
+      formData.append('hero_image', training.heroImageFile as File);
+      result = await pb.collection('trainings').create(formData);
+    } else {
+      result = await pb.collection('trainings').create(payload);
+    }
 
     // Insert attachments if any
     if (training.attachments && training.attachments.length > 0) {
@@ -192,9 +218,10 @@ export async function createTraining(training: Omit<Training, 'id'> & { id?: str
   }
 }
 
-export async function updateTrainingDb(training: Training): Promise<boolean> {
+export async function updateTrainingDb(training: Training & { heroImageFile?: File | null }): Promise<boolean> {
   try {
-    await pb.collection('trainings').update(training.id, {
+    const hasHeroFile = Boolean(training.heroImageFile);
+    const payload = {
       name: training.name,
       description: training.description,
       short_description: training.shortDescription || null,
@@ -217,7 +244,20 @@ export async function updateTrainingDb(training: Training): Promise<boolean> {
       location: training.location || null,
       speakers: training.speakers || null,
       target_audience: training.targetAudience || null,
-    });
+    } as Record<string, any>;
+
+    if (hasHeroFile) {
+      const formData = new FormData();
+      Object.entries(payload).forEach(([key, value]) => {
+        if (value !== null && value !== undefined) {
+          formData.append(key, String(value));
+        }
+      });
+      formData.append('hero_image', training.heroImageFile as File);
+      await pb.collection('trainings').update(training.id, formData);
+    } else {
+      await pb.collection('trainings').update(training.id, payload);
+    }
 
     // Update attachments - delete old ones and insert new ones
     if (training.attachments) {
