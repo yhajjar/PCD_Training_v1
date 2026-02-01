@@ -15,6 +15,9 @@ COPY . .
 ARG VITE_SUPABASE_URL
 ARG VITE_SUPABASE_PUBLISHABLE_KEY
 
+# Prevent Vite/SWC from running out of memory on constrained builders
+ENV NODE_OPTIONS=--max-old-space-size=1024
+
 RUN npm run build
 
 # Stage 2: Serve with Nginx
