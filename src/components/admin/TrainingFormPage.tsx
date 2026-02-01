@@ -345,6 +345,10 @@ export function TrainingFormPage() {
         });
         heroImageUrl = formData.heroImage || '';
       }
+          return att;
+        });
+        heroImageUrl = formData.heroImage || '';
+      }
           } else if (pending.type === 'attachment' && pending.tempId) {
             const result = await uploadTrainingFile(pending.file, 'attachments', uploadId);
             if (result.success && result.url) {
