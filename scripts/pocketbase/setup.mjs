@@ -82,7 +82,7 @@ async function ensureCollection(name, schema) {
       }
     });
     if (mergedSchema.length !== (existing.schema || []).length) {
-      await pb.collections.update(existing.id, { schema: mergedSchema });
+      await pb.collections.update(existing.id, { schema: mergedSchema, fields: mergedSchema });
       console.log(`Updated collection schema: ${name}`);
     } else {
       console.log(`Collection exists: ${name}`);
@@ -94,6 +94,7 @@ async function ensureCollection(name, schema) {
     name,
     type: 'base',
     schema,
+    fields: schema,
   });
   console.log(`Created collection: ${name}`);
   return created.id;
