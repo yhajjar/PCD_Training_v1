@@ -333,7 +333,7 @@ export function TrainingFormPage() {
       let updatedAttachments = [...formData.attachments];
 
       // Note: PocketBase handles files directly via FormData
-      // Files will be uploaded when creating/updating the training
+      // Files will be uploaded when creating/updating training
       if (pendingUploads.length > 0) {
         // Update attachment records with file references
         updatedAttachments = formData.attachments.map(att => {
@@ -345,27 +345,8 @@ export function TrainingFormPage() {
         });
         heroImageUrl = formData.heroImage || '';
       }
-          return att;
-        });
-        heroImageUrl = formData.heroImage || '';
-      }
-          } else if (pending.type === 'attachment' && pending.tempId) {
-            const result = await uploadTrainingFile(pending.file, 'attachments', uploadId);
-            if (result.success && result.url) {
-              // Update the attachment with the real URL
-              updatedAttachments = updatedAttachments.map(att => 
-                att.id === pending.tempId 
-                  ? { ...att, fileUrl: result.url!, filePath: result.path }
-                  : att
-              );
-            } else {
-              toast({
-                title: 'Upload Failed',
-                description: `Failed to upload ${pending.file.name}: ${result.error}`,
-                variant: 'destructive',
-              });
-              setIsSubmitting(false);
-              setIsUploading(false);
+
+      setIsUploading(false);
               return;
             }
           }
