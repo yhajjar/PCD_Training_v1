@@ -347,13 +347,6 @@ export function TrainingFormPage() {
       }
 
       setIsUploading(false);
-              return;
-            }
-          }
-        }
-      }
-
-      setIsUploading(false);
       
       const autoCloseRegistration = formData.availableSlots <= 0;
       
