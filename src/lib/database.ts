@@ -175,7 +175,6 @@ export async function createTraining(training: Omit<Training, 'id'> & { id?: str
       max_registrations: training.maxRegistrations,
       registration_method: training.registrationMethod,
       external_link: training.externalLink || null,
-      hero_image: training.heroImage || null,
       is_featured: training.isFeatured,
       is_recommended: training.isRecommended,
       is_registration_open: training.isRegistrationOpen,
@@ -236,7 +235,6 @@ export async function updateTrainingDb(training: Training & { heroImageFile?: Fi
       max_registrations: training.maxRegistrations,
       registration_method: training.registrationMethod,
       external_link: training.externalLink || null,
-      hero_image: training.heroImage || null,
       is_featured: training.isFeatured,
       is_recommended: training.isRecommended,
       is_registration_open: training.isRegistrationOpen,
@@ -245,6 +243,10 @@ export async function updateTrainingDb(training: Training & { heroImageFile?: Fi
       speakers: training.speakers || null,
       target_audience: training.targetAudience || null,
     } as Record<string, any>;
+
+    if (!hasHeroFile && training.heroImage === '') {
+      payload.hero_image = null;
+    }
 
     if (hasHeroFile) {
       const formData = new FormData();
