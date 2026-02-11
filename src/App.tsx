@@ -6,7 +6,6 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { TrainingProvider } from "@/context/TrainingContext";
 import { LoadingProvider } from "@/context/LoadingContext";
 import { AuthProvider } from "@/hooks/useAuth";
-import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { AdminRoute } from "@/components/auth/AdminRoute";
 import Index from "./pages/Index";
 import CalendarPage from "./pages/CalendarPage";
@@ -31,38 +30,10 @@ const App = () => (
           <BrowserRouter>
             <Routes>
               <Route path="/signin" element={<SignInPage />} />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <Index />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/calendar"
-                element={
-                  <ProtectedRoute>
-                    <CalendarPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/tools"
-                element={
-                  <ProtectedRoute>
-                    <ToolsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/support"
-                element={
-                  <ProtectedRoute>
-                    <SupportPage />
-                  </ProtectedRoute>
-                }
-              />
+              <Route path="/" element={<Index />} />
+              <Route path="/calendar" element={<CalendarPage />} />
+              <Route path="/tools" element={<ToolsPage />} />
+              <Route path="/support" element={<SupportPage />} />
               <Route
                 path="/admin"
                 element={
@@ -87,14 +58,7 @@ const App = () => (
                   </AdminRoute>
                 }
               />
-              <Route
-                path="/training/:id"
-                element={
-                  <ProtectedRoute>
-                    <TrainingDetailPage />
-                  </ProtectedRoute>
-                }
-              />
+              <Route path="/training/:id" element={<TrainingDetailPage />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </BrowserRouter>

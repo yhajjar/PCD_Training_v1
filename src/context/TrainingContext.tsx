@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { Category, Training, Registration, Resource, TrainingUpdate } from '@/types/training';
+import { Category, Training, Registration, Resource, TrainingUpdate, RecentCreatedTrainingItem } from '@/types/training';
 import { useAuth } from '@/hooks/useAuth';
+import { pb } from '@/integrations/pocketbase/client';
 import {
   fetchCategories,
   fetchTrainings,
+  fetchRecentCreatedTrainings,
   fetchRegistrations,
   fetchResources,
   fetchTrainingUpdates,
@@ -25,6 +27,7 @@ import {
 interface TrainingContextType {
   categories: Category[];
   trainings: Training[];
+  recentCreatedTrainings: RecentCreatedTrainingItem[];
   registrations: Registration[];
   resources: Resource[];
   trainingUpdates: TrainingUpdate[];
@@ -56,6 +59,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
   const { user, isLoading: authLoading } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [trainings, setTrainings] = useState<Training[]>([]);
+  const [recentCreatedTrainings, setRecentCreatedTrainings] = useState<RecentCreatedTrainingItem[]>([]);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [trainingUpdates, setTrainingUpdates] = useState<TrainingUpdate[]>([]);
@@ -65,9 +69,10 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [cats, trains, regs, res, updates] = await Promise.all([
+      const [cats, trains, recentCreated, regs, res, updates] = await Promise.all([
         fetchCategories(),
         fetchTrainings(),
+        fetchRecentCreatedTrainings(),
         fetchRegistrations(),
         fetchResources(),
         fetchTrainingUpdates(),
@@ -75,41 +80,37 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
 
       setCategories(cats);
       setTrainings(trains);
+      setRecentCreatedTrainings(recentCreated);
       setRegistrations(regs);
       setResources(res);
       setTrainingUpdates(updates);
+
+      if (cats.length === 0 && trains.length === 0 && res.length === 0) {
+        console.warn('[TrainingContext] Loaded empty datasets', {
+          hasUser: Boolean(user),
+          pbAuthValid: pb.authStore.isValid,
+          likelyCause: user
+            ? 'empty_dataset_or_rule_restriction'
+            : 'guest_session_or_empty_seed_data',
+        });
+      }
     } catch (error) {
-      console.error('Failed to load data:', error);
-      // Set empty arrays on error - don't use mock data
-      setCategories([]);
-      setTrainings([]);
-      setRegistrations([]);
-      setResources([]);
-      setTrainingUpdates([]);
+      console.error('[TrainingContext] Failed to load one or more datasets; keeping last known state.', {
+        hasUser: Boolean(user),
+        pbAuthValid: pb.authStore.isValid,
+        error,
+      });
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user]);
 
-  // Load data when user signs in (auth state changes)
+  // Load data when auth state resolves (works for both guests and signed-in users)
   useEffect(() => {
-    // Wait for auth to finish loading
     if (authLoading) {
       return;
     }
-    
-    // Only load data if user is authenticated
-    if (user) {
-      loadData();
-    } else {
-      // Clear data when user signs out
-      setCategories([]);
-      setTrainings([]);
-      setRegistrations([]);
-      setResources([]);
-      setTrainingUpdates([]);
-      setIsLoading(false);
-    }
+    loadData();
   }, [user, authLoading, loadData]);
 
   const refreshData = useCallback(async () => {
@@ -144,6 +145,16 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     const created = await createTraining(training);
     if (created) {
       setTrainings(prev => [...prev, created]);
+      setRecentCreatedTrainings(prev => [
+        {
+          id: created.id,
+          name: created.name,
+          date: created.date,
+          status: created.status,
+          categoryId: created.categoryId,
+        },
+        ...prev,
+      ].slice(0, 10));
     }
     return created;
   };
@@ -159,6 +170,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
     const success = await deleteTrainingDb(id);
     if (success) {
       setTrainings(prev => prev.filter(t => t.id !== id));
+      setRecentCreatedTrainings(prev => prev.filter(t => t.id !== id));
     }
   };
 
@@ -231,6 +243,7 @@ export function TrainingProvider({ children }: { children: ReactNode }) {
       value={{
         categories,
         trainings,
+        recentCreatedTrainings,
         registrations,
         resources,
         trainingUpdates,

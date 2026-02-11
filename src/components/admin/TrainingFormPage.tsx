@@ -17,8 +17,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { safeDate } from '@/lib/dateUtils';
-import { trainingSchema, validateForm, validateImageFile } from '@/lib/validation';
-import { pb } from '@/integrations/pocketbase/client';
+import { validateImageFile } from '@/lib/validation';
+import { PocketBaseValidationError } from '@/lib/database';
+import { validateTrainingFormForSubmit } from '@/lib/trainingFormValidation';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -66,6 +67,14 @@ interface FormErrors {
   [key: string]: string;
 }
 
+const STEP_FIELDS: Record<number, string[]> = {
+  0: ['name', 'categoryId', 'description', 'shortDescription'],
+  1: ['date', 'endDate'],
+  2: ['availableSlots', 'maxRegistrations', 'externalLink', 'registrationMethod'],
+  3: ['location', 'speakers'],
+  4: ['isRegistrationOpen'],
+};
+
 // Track files to upload on submit
 interface PendingUpload {
   file: File;
@@ -90,9 +99,19 @@ export function TrainingFormPage() {
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   const [removedAttachmentIds, setRemovedAttachmentIds] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [validationSummary, setValidationSummary] = useState<string[]>([]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const pendingUploadsRef = useRef<PendingUpload[]>([]);
+
+  const updatePendingUploads = (updater: (prev: PendingUpload[]) => PendingUpload[]) => {
+    setPendingUploads(prev => {
+      const next = updater(prev);
+      pendingUploadsRef.current = next;
+      return next;
+    });
+  };
 
   // Load existing training if editing
   useEffect(() => {
@@ -124,6 +143,9 @@ export function TrainingFormPage() {
           targetAudience: training.targetAudience || 'General',
         });
         setImagePreview(training.heroImage || null);
+        setPendingUploads([]);
+        pendingUploadsRef.current = [];
+        setRemovedAttachmentIds([]);
       }
     }
   }, [id, getTrainingById]);
@@ -138,7 +160,8 @@ export function TrainingFormPage() {
         if (!value) return 'Category is required';
         break;
       case 'description':
-        if (value && value.length > 5000) return 'Description must be less than 5000 characters';
+        if (!value?.trim()) return 'Description is required';
+        if (value.length > 5000) return 'Description must be less than 5000 characters';
         break;
       case 'shortDescription':
         if (value && value.length > 300) return 'Short description must be less than 300 characters';
@@ -161,6 +184,7 @@ export function TrainingFormPage() {
   const handleFieldChange = (field: string, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
     setTouched(prev => new Set(prev).add(field));
+    setValidationSummary([]);
     
     const error = validateField(field, value);
     setErrors(prev => {
@@ -175,38 +199,12 @@ export function TrainingFormPage() {
   };
 
   const validateStep = (step: number): boolean => {
-    const stepErrors: FormErrors = {};
-    
-    switch (step) {
-      case 0: // Basic Details
-        const nameError = validateField('name', formData.name);
-        const categoryError = validateField('categoryId', formData.categoryId);
-        const descError = validateField('description', formData.description);
-        const shortDescError = validateField('shortDescription', formData.shortDescription);
-        
-        if (nameError) stepErrors.name = nameError;
-        if (categoryError) stepErrors.categoryId = categoryError;
-        if (descError) stepErrors.description = descError;
-        if (shortDescError) stepErrors.shortDescription = shortDescError;
-        break;
-        
-      case 2: // Capacity
-        const slotsError = validateField('availableSlots', formData.availableSlots);
-        const maxRegError = validateField('maxRegistrations', formData.maxRegistrations);
-        const linkError = formData.registrationMethod === 'external' 
-          ? validateField('externalLink', formData.externalLink) 
-          : undefined;
-        
-        if (slotsError) stepErrors.availableSlots = slotsError;
-        if (maxRegError) stepErrors.maxRegistrations = maxRegError;
-        if (linkError) stepErrors.externalLink = linkError;
-        
-        if (formData.availableSlots > formData.maxRegistrations) {
-          stepErrors.availableSlots = 'Available slots cannot exceed max registrations';
-        }
-        break;
-    }
-    
+    const validation = validateTrainingFormForSubmit(formData);
+    const stepFields = STEP_FIELDS[step] || [];
+    const stepErrors = Object.fromEntries(
+      Object.entries(validation.errors).filter(([field]) => stepFields.includes(field))
+    );
+
     setErrors(prev => ({ ...prev, ...stepErrors }));
     return Object.keys(stepErrors).length === 0;
   };
@@ -240,7 +238,7 @@ export function TrainingFormPage() {
       reader.readAsDataURL(file);
       
       // Queue for upload on submit
-      setPendingUploads(prev => {
+      updatePendingUploads(prev => {
         // Remove any existing hero image from pending
         const filtered = prev.filter(p => p.type !== 'hero');
         return [...filtered, { file, type: 'hero' }];
@@ -254,7 +252,7 @@ export function TrainingFormPage() {
   const handleRemoveImage = () => {
     setFormData(prev => ({ ...prev, heroImage: '' }));
     setImagePreview(null);
-    setPendingUploads(prev => prev.filter(p => p.type !== 'hero'));
+    updatePendingUploads(prev => prev.filter(p => p.type !== 'hero'));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -262,20 +260,21 @@ export function TrainingFormPage() {
     const files = e.target.files;
     if (!files) return;
 
+    const nextPendingUploads: PendingUpload[] = [];
+    const nextAttachments: TrainingAttachment[] = [];
+
     Array.from(files).forEach((file) => {
       if (file.size > MAX_ATTACHMENT_SIZE) {
         toast({ title: 'Error', description: `File "${file.name}" exceeds 5MB limit`, variant: 'destructive' });
         return;
       }
-      if (file.type !== 'application/pdf') {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (!isPdf) {
         toast({ title: 'Error', description: `Only PDF files are allowed.`, variant: 'destructive' });
         return;
       }
 
       const tempId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      
-      // Add to pending uploads
-      setPendingUploads(prev => [...prev, { file, type: 'attachment', tempId }]);
       
       // Add placeholder to form data
       const newAttachment: TrainingAttachment = {
@@ -285,11 +284,18 @@ export function TrainingFormPage() {
         fileType: 'pdf',
         uploadedAt: new Date(),
       };
+
+      nextPendingUploads.push({ file, type: 'attachment', tempId });
+      nextAttachments.push(newAttachment);
+    });
+
+    if (nextPendingUploads.length > 0) {
+      updatePendingUploads(prev => [...prev, ...nextPendingUploads]);
       setFormData(prev => ({
         ...prev,
-        attachments: [...prev.attachments, newAttachment],
+        attachments: [...prev.attachments, ...nextAttachments],
       }));
-    });
+    }
 
     if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
@@ -298,7 +304,7 @@ export function TrainingFormPage() {
     const attachment = formData.attachments.find(a => a.id === attachmentId);
     
     // Remove from pending uploads if it was pending
-    setPendingUploads(prev => prev.filter(p => p.tempId !== attachmentId));
+    updatePendingUploads(prev => prev.filter(p => p.tempId !== attachmentId));
     
     // Track removals for PocketBase delete
     if (attachment && attachment.fileUrl !== 'pending-upload') {
@@ -312,32 +318,45 @@ export function TrainingFormPage() {
   };
 
   const handleSubmit = async () => {
-    // Validate all steps
-    for (let i = 0; i < STEPS.length; i++) {
-      if (!validateStep(i)) {
-        setCurrentStep(i);
-        toast({ 
-          title: 'Validation Error', 
-          description: 'Please fix the errors before submitting', 
-          variant: 'destructive' 
-        });
-        return;
-      }
+    const validation = validateTrainingFormForSubmit(formData);
+    if (!validation.isValid) {
+      setErrors(prev => ({ ...prev, ...validation.errors }));
+      setCurrentStep(validation.firstInvalidStep);
+      setValidationSummary(validation.errorSummary);
+      setTouched(prev => new Set([...Array.from(prev), ...validation.invalidFields]));
+      toast({
+        title: 'Validation Error',
+        description: 'Please review the blocked fields and try again.',
+        variant: 'destructive',
+      });
+      return;
     }
+    setValidationSummary([]);
 
     // PIN protection is handled by PinProtectedRoute wrapper
+    const activePendingUploads = pendingUploadsRef.current;
+    const pendingAttachmentPlaceholders = formData.attachments.filter(att => att.fileUrl === 'pending-upload');
+    const pendingAttachmentFiles = activePendingUploads.filter(p => p.type === 'attachment');
+
+    if (pendingAttachmentPlaceholders.length > 0 && pendingAttachmentFiles.length === 0) {
+      toast({
+        title: 'Attachment Upload Error',
+        description: 'Selected attachment files were not retained. Please remove and re-upload the attachment(s), then save again.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     setIsSubmitting(true);
-    setIsUploading(pendingUploads.length > 0);
+    setIsUploading(activePendingUploads.length > 0);
 
     try {
       // For new trainings, we'll upload files using a temp ID, then create training
       // For editing, we use the existing training ID
-      const uploadId = id || `temp-${Date.now()}`;
       let heroImageUrl = formData.heroImage;
       let updatedAttachments = [...formData.attachments];
-      const heroPending = pendingUploads.find(p => p.type === 'hero');
-      const attachmentFiles = pendingUploads
+      const heroPending = activePendingUploads.find(p => p.type === 'hero');
+      const attachmentFiles = activePendingUploads
         .filter(p => p.type === 'attachment')
         .map(p => ({
           file: p.file,
@@ -347,10 +366,10 @@ export function TrainingFormPage() {
 
       // Note: PocketBase handles files directly via FormData
       // Files will be uploaded when creating/updating training
-      if (pendingUploads.length > 0) {
+      if (activePendingUploads.length > 0) {
         // Update attachment records with file references
         updatedAttachments = formData.attachments.map(att => {
-          const pending = pendingUploads.find(p => p.tempId === att.id);
+          const pending = activePendingUploads.find(p => p.tempId === att.id);
           if (pending?.file) {
             return { ...att, fileUrl: 'pending-upload' };
           }
@@ -362,10 +381,14 @@ export function TrainingFormPage() {
       setIsUploading(false);
       
       const autoCloseRegistration = formData.availableSlots <= 0;
+      const normalizedStartDate = safeDate(formData.date);
+      const normalizedEndDate = formData.endDate ? safeDate(formData.endDate) : undefined;
       
       // Build training data without id for new trainings
       const trainingFormData = {
         ...formData,
+        date: normalizedStartDate,
+        endDate: normalizedEndDate,
         heroImage: heroImageUrl === 'pending-upload' ? '' : heroImageUrl,
         attachments: updatedAttachments.filter(att => att.fileUrl !== 'pending-upload'),
         isRegistrationOpen: autoCloseRegistration ? false : formData.isRegistrationOpen,
@@ -437,15 +460,63 @@ export function TrainingFormPage() {
 
       // Clear pending uploads
       setPendingUploads([]);
+      pendingUploadsRef.current = [];
       setRemovedAttachmentIds([]);
       navigate('/admin');
     } catch (error) {
       console.error('Submit error:', error);
-      toast({ 
-        title: 'Error', 
-        description: 'An error occurred. Please try again.', 
-        variant: 'destructive' 
-      });
+
+      if (error instanceof PocketBaseValidationError) {
+        // Map PocketBase snake_case field names to camelCase form field names
+        const fieldMap: Record<string, string> = {
+          name: 'name',
+          description: 'description',
+          short_description: 'shortDescription',
+          category_id: 'categoryId',
+          date: 'date',
+          available_slots: 'availableSlots',
+          max_registrations: 'maxRegistrations',
+          external_link: 'externalLink',
+          location: 'location',
+          speakers: 'speakers',
+        };
+
+        const newErrors: FormErrors = {};
+        for (const [pbField, errorInfo] of Object.entries(error.fieldErrors)) {
+          const formField = fieldMap[pbField] || pbField;
+          newErrors[formField] = errorInfo.message;
+        }
+
+        if (Object.keys(newErrors).length > 0) {
+          setErrors(prev => ({ ...prev, ...newErrors }));
+          // Navigate to the first wizard step that has an error
+          const step0Fields = ['name', 'categoryId', 'description', 'shortDescription'];
+          const step2Fields = ['availableSlots', 'maxRegistrations', 'externalLink'];
+          const errorFields = Object.keys(newErrors);
+
+          if (errorFields.some(f => step0Fields.includes(f))) {
+            setCurrentStep(0);
+          } else if (errorFields.some(f => step2Fields.includes(f))) {
+            setCurrentStep(2);
+          }
+        }
+
+        const errorMessages = Object.entries(error.fieldErrors)
+          .map(([field, info]) => `${fieldMap[field] || field}: ${info.message}`)
+          .join('; ');
+
+        toast({
+          title: 'Validation Error',
+          description: errorMessages || error.message,
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: 'An error occurred. Please try again.',
+          variant: 'destructive'
+        });
+      }
     } finally {
       setIsSubmitting(false);
       setIsUploading(false);
@@ -561,19 +632,32 @@ export function TrainingFormPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="description">Full Description</Label>
+                  <Label htmlFor="description" className="flex items-center gap-1">
+                    Full Description <span className="text-destructive">*</span>
+                  </Label>
                   <Textarea
                     id="description"
                     value={formData.description}
                     onChange={(e) => handleFieldChange('description', e.target.value)}
                     placeholder="Detailed description of the training, objectives, and what participants will learn..."
                     rows={5}
-                    className="resize-none"
+                    className={cn(
+                      "resize-none",
+                      errors.description && touched.has('description') && "border-destructive focus-visible:ring-destructive"
+                    )}
                     maxLength={5000}
+                    aria-describedby={errors.description ? 'description-error' : undefined}
+                    aria-invalid={!!errors.description}
                   />
                   <p className="text-xs text-muted-foreground">
                     {formData.description?.length || 0}/5000 characters
                   </p>
+                  {errors.description && touched.has('description') && (
+                    <p id="description-error" className="text-sm text-destructive flex items-center gap-1">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      {errors.description}
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -1265,6 +1349,20 @@ export function TrainingFormPage() {
 
       {/* Main Content */}
       <main className="container max-w-5xl mx-auto px-4 py-8">
+        {validationSummary.length > 0 && (
+          <Alert variant="destructive" className="mb-6">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <p className="font-medium mb-2">Submission blocked by validation errors:</p>
+              <ul className="list-disc pl-5 space-y-1">
+                {validationSummary.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+
         <div className="animate-fade-in">
           {renderStepContent()}
         </div>

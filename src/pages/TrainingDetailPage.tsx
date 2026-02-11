@@ -1,20 +1,22 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import { 
-  Calendar, 
-  Clock, 
-  Users, 
-  ArrowLeft, 
-  ExternalLink, 
+import {
+  Calendar,
+  Clock,
+  Users,
+  ArrowLeft,
+  ExternalLink,
   FileText,
   Download,
   MapPin,
   ImageIcon,
   Mic,
   Target,
-  Timer
+  Timer,
+  LogIn
 } from 'lucide-react';
 import { useTraining } from '@/context/TrainingContext';
+import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,7 +32,8 @@ import { useState } from 'react';
 const TrainingDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getTrainingById } = useTraining();
+  const { getTrainingById, getRegistrationsByTrainingId } = useTraining();
+  const { user } = useAuth();
   const [showRegistrationModal, setShowRegistrationModal] = useState(false);
 
   const training = id ? getTrainingById(id) : null;
@@ -51,17 +54,24 @@ const TrainingDetailPage = () => {
   }
 
   const trainingDate = safeDate(training.date);
-  const slotsPercentage = training.maxRegistrations 
+  const slotsPercentage = training.maxRegistrations
     ? ((training.maxRegistrations - training.availableSlots) / training.maxRegistrations) * 100
     : 50;
-  
-  // Registration is allowed only if explicitly open and not blocked by status/slots
+
+  // Check if current user is already registered
+  const registrations = getRegistrationsByTrainingId(training.id);
+  const isAlreadyRegistered = user?.email
+    ? registrations.some(r => r.participantEmail.toLowerCase() === user.email!.toLowerCase())
+    : false;
+
+  // Registration is allowed only if explicitly open and not blocked by status/slots/duplicate
   const isRegistrationOpen = training.isRegistrationOpen ?? true;
-  const canRegister = isRegistrationOpen && 
-    training.status !== 'Completed' && 
-    training.status !== 'Cancelled' && 
-    training.status !== 'On Hold' && 
-    training.availableSlots > 0;
+  const canRegister = isRegistrationOpen &&
+    training.status !== 'Completed' &&
+    training.status !== 'Cancelled' &&
+    training.status !== 'On Hold' &&
+    training.availableSlots > 0 &&
+    !isAlreadyRegistered;
 
   const handleRegister = () => {
     if (training.registrationMethod === 'external' && training.externalLink) {
@@ -299,23 +309,46 @@ const TrainingDetailPage = () => {
                     <Separator />
 
                     {/* Registration Button */}
-                    <Button 
-                      className="w-full" 
-                      size="lg"
-                      onClick={handleRegister}
-                      disabled={!canRegister}
-                    >
-                      {training.registrationMethod === 'external' ? (
-                        <>
-                          Register Now
-                          <ExternalLink className="h-4 w-4 ml-2" />
-                        </>
-                      ) : (
-                        'Register Now'
-                      )}
-                    </Button>
+                    {isAlreadyRegistered ? (
+                      <Button className="w-full" size="lg" disabled>
+                        Already Registered
+                      </Button>
+                    ) : canRegister && !user ? (
+                      <Button
+                        className="w-full"
+                        size="lg"
+                        onClick={() => {
+                          window.location.href = `/mellon/login?ReturnTo=${encodeURIComponent(window.location.pathname)}`;
+                        }}
+                      >
+                        <LogIn className="h-4 w-4 mr-2" />
+                        Sign in to Register
+                      </Button>
+                    ) : (
+                      <Button
+                        className="w-full"
+                        size="lg"
+                        onClick={handleRegister}
+                        disabled={!canRegister}
+                      >
+                        {training.registrationMethod === 'external' ? (
+                          <>
+                            Register Now
+                            <ExternalLink className="h-4 w-4 ml-2" />
+                          </>
+                        ) : (
+                          'Register Now'
+                        )}
+                      </Button>
+                    )}
 
-                    {!isRegistrationOpen && training.status !== 'Completed' && training.status !== 'Cancelled' && (
+                    {isAlreadyRegistered && (
+                      <p className="text-sm text-center text-primary">
+                        You are registered for this training
+                      </p>
+                    )}
+
+                    {!isRegistrationOpen && !isAlreadyRegistered && training.status !== 'Completed' && training.status !== 'Cancelled' && (
                       <p className="text-sm text-center text-destructive">
                         Registration is currently closed
                       </p>
@@ -339,7 +372,7 @@ const TrainingDetailPage = () => {
                       </p>
                     )}
 
-                    {training.availableSlots <= 0 && isRegistrationOpen && training.status !== 'Completed' && training.status !== 'Cancelled' && (
+                    {training.availableSlots <= 0 && !isAlreadyRegistered && isRegistrationOpen && training.status !== 'Completed' && training.status !== 'Cancelled' && (
                       <p className="text-sm text-center text-muted-foreground">
                         This training is fully booked
                       </p>

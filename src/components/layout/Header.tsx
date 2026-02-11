@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogIn, LogOut, User, Loader2 } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Menu, X, LogOut, LogIn, User, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -23,12 +23,10 @@ const navItems = [
 export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
-  const navigate = useNavigate();
   const { user, isLoading, isAdmin, signOut } = useAuth();
 
   const handleSignOut = async () => {
     await signOut();
-    navigate('/');
   };
 
   return (
@@ -86,14 +84,16 @@ export function Header() {
                       <User className="h-4 w-4 text-primary" />
                     </div>
                     <span className="hidden sm:inline max-w-[150px] truncate">
-                      {user.email}
+                      {user.name || user.email}
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
                   <div className="px-2 py-1.5">
-                    <p className="text-sm font-medium">{user.email}</p>
-                    <p className="text-xs text-muted-foreground">Signed in</p>
+                    <p className="text-sm font-medium">{user.name || user.email}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {user.email}
+                    </p>
                   </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleSignOut} className="text-destructive">
@@ -104,10 +104,12 @@ export function Header() {
               </DropdownMenu>
             ) : (
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                onClick={() => navigate('/signin')}
                 className="gap-2"
+                onClick={() => {
+                  window.location.href = `/mellon/login?ReturnTo=${encodeURIComponent(window.location.pathname)}`;
+                }}
               >
                 <LogIn className="h-4 w-4" />
                 <span className="hidden sm:inline">Sign In</span>

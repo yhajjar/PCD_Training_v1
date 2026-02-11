@@ -16,8 +16,9 @@ export const trainingSchema = z.object({
     .min(1, 'Name is required')
     .max(200, 'Name must be less than 200 characters'),
   description: z.string()
-    .max(5000, 'Description must be less than 5000 characters')
-    .optional(),
+    .trim()
+    .min(1, 'Description is required')
+    .max(5000, 'Description must be less than 5000 characters'),
   shortDescription: z.string()
     .max(300, 'Short description must be less than 300 characters')
     .optional(),

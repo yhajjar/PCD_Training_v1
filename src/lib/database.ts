@@ -1,5 +1,130 @@
 import { pb } from '@/integrations/pocketbase/client';
-import { Category, Training, Registration, Resource, TrainingUpdate, TrainingAttachment, LearningPlatform } from '@/types/training';
+import {
+  Category,
+  Training,
+  Registration,
+  Resource,
+  TrainingUpdate,
+  TrainingAttachment,
+  LearningPlatform,
+  RecentCreatedTrainingItem,
+} from '@/types/training';
+
+// ============= PocketBase Error Handling =============
+
+export class PocketBaseValidationError extends Error {
+  public fieldErrors: Record<string, { message: string; code: string }>;
+  public statusCode: number;
+
+  constructor(message: string, statusCode: number, fieldErrors: Record<string, { message: string; code: string }>) {
+    super(message);
+    this.name = 'PocketBaseValidationError';
+    this.statusCode = statusCode;
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+function throwIfPocketBaseError(error: unknown, fallbackMessage: string): never {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const pbError = error as { status: number; response: { message?: string; data?: Record<string, { message: string; code: string }> } };
+    const fieldErrors = pbError.response?.data || {};
+    const message = pbError.response?.message || fallbackMessage;
+
+    console.error('PocketBase validation errors:', {
+      status: pbError.status,
+      message,
+      fieldErrors,
+    });
+
+    throw new PocketBaseValidationError(message, pbError.status, fieldErrors);
+  }
+  throw error;
+}
+
+type ReadErrorKind = 'api_unreachable' | 'auth_or_rules' | 'api_path_misroute_html' | 'request_cancelled' | 'unknown';
+
+class DataLoadShapeError extends Error {
+  public readonly code: ReadErrorKind = 'api_path_misroute_html';
+  public readonly operation: string;
+
+  constructor(operation: string) {
+    super(
+      `Unexpected list response shape while loading ${operation}. This usually means API calls were routed to a non-/api SPA path.`
+    );
+    this.name = 'DataLoadShapeError';
+    this.operation = operation;
+  }
+}
+
+function ensurePagedListShape(operation: string, result: unknown): asserts result is { items: unknown[] } {
+  if (
+    !result ||
+    typeof result !== 'object' ||
+    !('items' in result) ||
+    !Array.isArray((result as { items?: unknown[] }).items)
+  ) {
+    throw new DataLoadShapeError(operation);
+  }
+}
+
+function classifyReadError(error: unknown): ReadErrorKind {
+  if (error instanceof DataLoadShapeError) {
+    return error.code;
+  }
+
+  if (error && typeof error === 'object') {
+    const pbError = error as {
+      status?: number;
+      isAbort?: boolean;
+      message?: string;
+      response?: { message?: string };
+    };
+
+    if (pbError.isAbort) {
+      return 'request_cancelled';
+    }
+
+    if (pbError.status === 401 || pbError.status === 403) {
+      return 'auth_or_rules';
+    }
+
+    const message = (pbError.response?.message || pbError.message || '').toLowerCase();
+    if (
+      pbError.status === 0 ||
+      message.includes('failed to fetch') ||
+      message.includes('network') ||
+      message.includes('ecconnrefused')
+    ) {
+      return 'api_unreachable';
+    }
+  }
+
+  if (error instanceof TypeError) {
+    const message = error.message.toLowerCase();
+    if (message.includes("reading 'map'") || message.includes('undefined')) {
+      return 'api_path_misroute_html';
+    }
+  }
+
+  return 'unknown';
+}
+
+function logReadError(operation: string, error: unknown) {
+  const classified = classifyReadError(error);
+  if (classified === 'api_path_misroute_html') {
+    console.error(
+      `[DataLoad:${operation}] ${classified} - verify PocketBase base URL resolves to root and requests target /api/...`,
+      {
+        baseURL: pb.baseURL,
+        route: typeof window !== 'undefined' ? window.location.pathname : 'n/a',
+        error,
+      }
+    );
+    return;
+  }
+
+  console.error(`[DataLoad:${operation}] ${classified}`, error);
+}
 
 // ============= Categories =============
 
@@ -8,13 +133,14 @@ export async function fetchCategories(): Promise<Category[]> {
     const result = await pb.collection('categories').getList(1, 100, {
       sort: 'name'
     });
+    ensurePagedListShape('categories', result);
     return result.items.map(row => ({
       id: row.id,
       name: row.name,
       color: row.color,
     }));
   } catch (error) {
-    console.error('Error fetching categories:', error);
+    logReadError('categories', error);
     return [];
   }
 }
@@ -154,9 +280,11 @@ export async function fetchTrainings(): Promise<Training[]> {
     const trainingsResult = await pb.collection('trainings').getList(1, 100, {
       sort: 'date'
     });
+    ensurePagedListShape('trainings', trainingsResult);
 
     // Fetch attachments
     const attachmentsResult = await pb.collection('training_attachments').getList(1, 500);
+    ensurePagedListShape('training_attachments', attachmentsResult);
 
     const attachmentsByTraining = new Map<string, TrainingAttachment[]>();
     attachmentsResult.items.forEach(att => {
@@ -174,7 +302,30 @@ export async function fetchTrainings(): Promise<Training[]> {
 
     return trainingsResult.items.map(row => dbToTraining(row as DbTraining, attachmentsByTraining.get(row.id) || []));
   } catch (error) {
-    console.error('Error fetching trainings:', error);
+    logReadError('trainings', error);
+    return [];
+  }
+}
+
+export async function fetchRecentCreatedTrainings(limit = 10): Promise<RecentCreatedTrainingItem[]> {
+  try {
+    const result = await pb.collection('trainings').getList(1, limit, {
+      sort: '-@rowid',
+    });
+    ensurePagedListShape('recent_created_trainings', result);
+
+    return result.items.map((row) => {
+      const typedRow = row as unknown as DbTraining;
+      return {
+        id: typedRow.id,
+        name: typedRow.name,
+        date: typedRow.date ? new Date(typedRow.date) : undefined,
+        status: typedRow.status as RecentCreatedTrainingItem['status'],
+        categoryId: typedRow.category_id || '',
+      };
+    });
+  } catch (error) {
+    logReadError('recent_created_trainings', error);
     return [];
   }
 }
@@ -211,7 +362,11 @@ export async function createTraining(training: Omit<Training, 'id'> & { id?: str
       const formData = new FormData();
       Object.entries(payload).forEach(([key, value]) => {
         if (value !== null && value !== undefined) {
-          formData.append(key, String(value));
+          if (typeof value === 'boolean') {
+            formData.append(key, value ? 'true' : 'false');
+          } else {
+            formData.append(key, String(value));
+          }
         }
       });
       formData.append('hero_image', training.heroImageFile as File);
@@ -235,7 +390,7 @@ export async function createTraining(training: Omit<Training, 'id'> & { id?: str
     return dbToTraining(result as DbTraining, training.attachments || []);
   } catch (error) {
     console.error('Error creating training:', error);
-    return null;
+    throwIfPocketBaseError(error, 'Failed to create training');
   }
 }
 
@@ -274,7 +429,11 @@ export async function updateTrainingDb(training: Training & { heroImageFile?: Fi
       const formData = new FormData();
       Object.entries(payload).forEach(([key, value]) => {
         if (value !== null && value !== undefined) {
-          formData.append(key, String(value));
+          if (typeof value === 'boolean') {
+            formData.append(key, value ? 'true' : 'false');
+          } else {
+            formData.append(key, String(value));
+          }
         }
       });
       formData.append('hero_image', training.heroImageFile as File);
@@ -305,7 +464,7 @@ export async function updateTrainingDb(training: Training & { heroImageFile?: Fi
     return true;
   } catch (error) {
     console.error('Error updating training:', error);
-    return false;
+    throwIfPocketBaseError(error, 'Failed to update training');
   }
 }
 
@@ -342,7 +501,7 @@ function dbToRegistration(row: DbRegistration): Registration {
     participantName: row.participant_name,
     participantEmail: row.participant_email,
     participantPhone: row.participant_phone || undefined,
-    registeredAt: new Date(row.registered_at),
+    registeredAt: row.registered_at ? new Date(row.registered_at) : new Date(),
     status: row.status as Registration['status'],
     attendanceStatus: row.attendance_status as Registration['attendanceStatus'],
     notes: row.notes || undefined,
@@ -355,9 +514,10 @@ export async function fetchRegistrations(): Promise<Registration[]> {
     const result = await pb.collection('registrations').getList(1, 100, {
       sort: 'registered_at'
     });
+    ensurePagedListShape('registrations', result);
     return result.items.map(row => dbToRegistration(row as DbRegistration));
   } catch (error) {
-    console.error('Error fetching registrations:', error);
+    logReadError('registrations', error);
     return [];
   }
 }
@@ -370,6 +530,7 @@ export async function createRegistration(registration: Omit<Registration, 'id'> 
       participant_name: registration.participantName,
       participant_email: registration.participantEmail,
       participant_phone: registration.participantPhone || null,
+      registered_at: registration.registeredAt instanceof Date ? registration.registeredAt.toISOString() : registration.registeredAt || new Date().toISOString(),
       status: registration.status,
       attendance_status: registration.attendanceStatus,
       notes: registration.notes || null,
@@ -418,6 +579,18 @@ interface DbResource {
   file_url: string | null;
   file_path: string | null;
   external_link: string | null;
+  file?: string | null;
+}
+
+function getResourceFileUrl(row: DbResource): string | undefined {
+  if (row.file) {
+    try {
+      return pb.files.getURL(row as any, row.file);
+    } catch {
+      return row.file || undefined;
+    }
+  }
+  return row.file_url || undefined;
 }
 
 function dbToResource(row: DbResource): Resource {
@@ -425,7 +598,7 @@ function dbToResource(row: DbResource): Resource {
     id: row.id,
     title: row.title,
     type: row.type as Resource['type'],
-    fileUrl: row.file_url || undefined,
+    fileUrl: getResourceFileUrl(row),
     filePath: row.file_path || undefined,
     externalLink: row.external_link || undefined,
   };
@@ -436,22 +609,35 @@ export async function fetchResources(): Promise<Resource[]> {
     const result = await pb.collection('resources').getList(1, 100, {
       sort: 'title'
     });
+    ensurePagedListShape('resources', result);
     return result.items.map(row => dbToResource(row as DbResource));
   } catch (error) {
-    console.error('Error fetching resources:', error);
+    logReadError('resources', error);
     return [];
   }
 }
 
-export async function createResource(resource: Omit<Resource, 'id'>): Promise<Resource | null> {
+export async function createResource(
+  resource: Omit<Resource, 'id'> & { resourceFile?: File | null }
+): Promise<Resource | null> {
   try {
-    const result = await pb.collection('resources').create({
-      title: resource.title,
-      type: resource.type,
-      file_url: resource.fileUrl || null,
-      file_path: resource.filePath || null,
-      external_link: resource.externalLink || null,
-    });
+    let result;
+    if (resource.resourceFile) {
+      const formData = new FormData();
+      formData.append('title', resource.title);
+      formData.append('type', resource.type);
+      if (resource.externalLink) formData.append('external_link', resource.externalLink);
+      formData.append('file', resource.resourceFile);
+      result = await pb.collection('resources').create(formData);
+    } else {
+      result = await pb.collection('resources').create({
+        title: resource.title,
+        type: resource.type,
+        file_url: resource.fileUrl || null,
+        file_path: resource.filePath || null,
+        external_link: resource.externalLink || null,
+      });
+    }
     return dbToResource(result as DbResource);
   } catch (error) {
     console.error('Error creating resource:', error);
@@ -459,15 +645,27 @@ export async function createResource(resource: Omit<Resource, 'id'>): Promise<Re
   }
 }
 
-export async function updateResourceDb(resource: Resource): Promise<boolean> {
+export async function updateResourceDb(
+  resource: Resource & { resourceFile?: File | null; removeFile?: boolean }
+): Promise<boolean> {
   try {
-    await pb.collection('resources').update(resource.id, {
-      title: resource.title,
-      type: resource.type,
-      file_url: resource.fileUrl || null,
-      file_path: resource.filePath || null,
-      external_link: resource.externalLink || null,
-    });
+    if (resource.resourceFile) {
+      const formData = new FormData();
+      formData.append('title', resource.title);
+      formData.append('type', resource.type);
+      if (resource.externalLink) formData.append('external_link', resource.externalLink);
+      formData.append('file', resource.resourceFile);
+      await pb.collection('resources').update(resource.id, formData);
+    } else {
+      await pb.collection('resources').update(resource.id, {
+        title: resource.title,
+        type: resource.type,
+        file_url: resource.fileUrl || null,
+        file_path: resource.filePath || null,
+        external_link: resource.externalLink || null,
+        ...(resource.removeFile ? { file: null } : {}),
+      });
+    }
     return true;
   } catch (error) {
     console.error('Error updating resource:', error);
@@ -505,7 +703,8 @@ function dbToTrainingUpdate(row: DbTrainingUpdate): TrainingUpdate {
     trainingId: row.training_id || undefined,
     trainingName: row.training_name,
     message: row.message,
-    timestamp: new Date(row.timestamp),
+    // Use epoch fallback to avoid showing missing DB timestamps as "just now".
+    timestamp: row.timestamp ? new Date(row.timestamp) : new Date(0),
     previousValue: row.previous_value || undefined,
     newValue: row.new_value || undefined,
   };
@@ -514,11 +713,12 @@ function dbToTrainingUpdate(row: DbTrainingUpdate): TrainingUpdate {
 export async function fetchTrainingUpdates(): Promise<TrainingUpdate[]> {
   try {
     const result = await pb.collection('training_updates').getList(1, 50, {
-      sort: 'created'
+      sort: '-timestamp,-@rowid',
     });
+    ensurePagedListShape('training_updates', result);
     return result.items.map(row => dbToTrainingUpdate(row as DbTrainingUpdate));
   } catch (error) {
-    console.error('Error fetching training updates:', error);
+    logReadError('training_updates', error);
     return [];
   }
 }
@@ -530,6 +730,7 @@ export async function createTrainingUpdate(update: Omit<TrainingUpdate, 'id' | '
       training_id: update.trainingId || null,
       training_name: update.trainingName,
       message: update.message,
+      timestamp: new Date().toISOString(),
       previous_value: update.previousValue || null,
       new_value: update.newValue || null,
     });
@@ -554,6 +755,7 @@ export async function fetchLearningPlatforms(): Promise<LearningPlatform[]> {
     const result = await pb.collection('learning_platforms').getList(1, 50, {
       sort: 'name'
     });
+    ensurePagedListShape('learning_platforms', result);
     return result.items.map((row) => ({
       id: row.id,
       name: row.name,
@@ -561,7 +763,7 @@ export async function fetchLearningPlatforms(): Promise<LearningPlatform[]> {
       url: row.url,
     } as LearningPlatform));
   } catch (error) {
-    console.error('Error fetching learning platforms:', error);
+    logReadError('learning_platforms', error);
     return [];
   }
 }

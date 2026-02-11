@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run security:check-bundle",
     "build:dev": "vite build --mode development",
+    "security:check-bundle": "node scripts/security/check-no-embedded-auth-tokens.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

@@ -53,6 +53,14 @@ export interface Training {
   targetAudience?: TargetAudience;
 }
 
+export interface RecentCreatedTrainingItem {
+  id: string;
+  name: string;
+  date?: Date;
+  status: TrainingStatus;
+  categoryId: string;
+}
+
 export type EnrollmentStatus = 
   | 'registered'
   | 'pending_approval'
